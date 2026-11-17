@@ -22,8 +22,68 @@
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
 
+/*
+ * Pinout:
+ * PI1  = D13 = C1
+ * PI2  = D8  = C2
+ * PI3  = D7  = C3
+ * PI0  = D5  = C4
+ * PB8  = D15 = R1
+ * PB9  = D14 = R2
+ * PB14 = D12 = R3
+ * PB15 = D11 = R4
+ * */
 int main(void)
 {
-    /* Loop forever */
-	for(;;);
+    // Init registers
+
+	// Enable port I, then enable port B
+	RCC->AHB1ENR |= (1UL << 8) | (1UL << 1);
+
+    // Bit 14 enables SYSCFG clock (for routing GPIO to EXTI)
+    RCC->APB2ENR |= (1UL << 14);
+
+    // Initialize GPIO pins
+
+    // Set all columns as digital inputs w/ pull up resistor
+    // PI1  = D13 = C1
+    GPIOI->MODER &= ~(3UL << (1 * 2));
+    GPIOI->PUPDR &= ~(3UL << (1 * 2));
+    GPIOI->PUPDR |=  (1UL << (1 * 2));
+
+    // PI2  = D8  = C2
+    GPIOI->MODER &= ~(3UL << (2 * 2));
+    GPIOI->PUPDR &= ~(3UL << (2 * 2));
+    GPIOI->PUPDR |=  (1UL << (2 * 2));
+
+    // PI3  = D7  = C3
+    GPIOI->MODER &= ~(3UL << (3 * 2));
+    GPIOI->PUPDR &= ~(3UL << (3 * 2));
+    GPIOI->PUPDR |=  (1UL << (3 * 2));
+
+    // PI0  = D5  = C4
+    GPIOI->MODER &= ~(3UL << (0 * 2));
+    GPIOI->PUPDR &= ~(3UL << (0 * 2));
+    GPIOI->PUPDR |=  (1UL << (0 * 2));
+
+    // Set all rows as digital outputs
+    // PB8  = D15 = R1
+    GPIOI->MODER &= ~(3UL << (8 * 2));
+    GPIOI->MODER |= (1UL << (8 * 2));
+    GPIOI->PUPDR &= ~(3UL << (8 * 2));
+
+    // PB9  = D14 = R2
+    GPIOI->MODER &= ~(3UL << (9 * 2));
+    GPIOI->MODER |= (1UL << (9 * 2));
+    GPIOI->PUPDR &= ~(3UL << (9 * 2));
+
+    // PB14 = D12 = R3
+    GPIOI->MODER &= ~(3UL << (14 * 2));
+    GPIOI->MODER |= (1UL << (14 * 2));
+    GPIOI->PUPDR &= ~(3UL << (14 * 2));
+
+    // PB15 = D11 = R4
+    GPIOI->MODER &= ~(3UL << (15 * 2));
+    GPIOI->MODER |= (1UL << (15 * 2));
+    GPIOI->PUPDR &= ~(3UL << (15 * 2));
 }
