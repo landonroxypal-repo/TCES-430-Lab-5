@@ -204,9 +204,6 @@ void EXTI0_IRQHandler(void) {
 		unsigned int col = 3;
 		unsigned int row = 0xFF;
 
-		// Enable column i
-		GPIOI->BSRR = (1UL << 0);
-
 		// Short delay
 		for (volatile int d = 0; d < 50; d++);
 
@@ -225,10 +222,11 @@ void EXTI0_IRQHandler(void) {
 			row = 3;
 		}
 
-		// Disable column i
-		GPIOI->BSRR = (1UL << (0 + 16));
+		char last_key;
 
-		char result = key_val[row][col];
+		if (row < 4) {
+			last_key = key_val[row][col];
+		}
 
 		// PB8  = D15 = R1
 		GPIOB->MODER &= ~(3UL << (8 * 2));
