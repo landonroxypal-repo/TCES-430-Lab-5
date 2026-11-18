@@ -201,45 +201,78 @@ void EXTI0_IRQHandler(void) {
 		GPIOI->BSRR = (1UL << (2 + 16));
 		GPIOI->BSRR = (1UL << (3 + 16));
 
-		unsigned int row, col = 0;
+		unsigned int col = 3;
+		unsigned int row = 0;
 
-		for (unsigned int i = 0; i < 4; i++) {
-			// Enable column i
-			GPIOI->BSRR = (1UL << ((i + 1) % 4));
+		// Enable column i
+		GPIOI->BSRR = (1UL << col);
 
-			// Check PB8  = D15 = R1
-			if (GPIOB->IDR & 0x0100) {
-				row = 1;
-				col = i;
-				break;
-			}
+		// Check PB8  = D15 = R1
+		// Check PB9  = D14 = R2
+		// Check PB14 = D12 = R3
+		// Check PB15 = D11 = R4
 
-			// Check PB9  = D14 = R2
-			if (GPIOB->IDR & 0x0200) {
-				row = 2;
-				col = i;
-				break;
-			}
-
-			// Check PB14 = D12 = R3
-			if (GPIOB->IDR & 0x4000) {
-				row = 3;
-				col = i;
-				break;
-			}
-
-			// Check PB15 = D11 = R4
-			if (GPIOB->IDR & 0x8000) {
-				row = 4;
-				col = i;
-				break;
-			}
-
-			// Disable column i
-			GPIOI->BSRR = (1UL << (i + 16));
+		if (!(GPIOB->IDR & 0x0100)) {
+			row = 0;
+		} else if (!(GPIOB->IDR & 0x0200)) {
+			row = 1;
+		} else if (!(GPIOB->IDR & 0x4000)) {
+			row = 2;
+		} else if (!(GPIOB->IDR & 0x8000)) {
+			row = 3;
 		}
 
+		// Disable column i
+		GPIOI->BSRR = (1UL << (col + 16));
+
 		char result = key_val[row][col];
+
+		// PB8  = D15 = R1
+		GPIOB->MODER &= ~(3UL << (8 * 2));
+		GPIOB->MODER |= (1UL << (8 * 2));
+		GPIOB->PUPDR &= ~(3UL << (8 * 2));
+
+		// PB9  = D14 = R2
+		GPIOB->MODER &= ~(3UL << (9 * 2));
+		GPIOB->MODER |= (1UL << (9 * 2));
+		GPIOB->PUPDR &= ~(3UL << (9 * 2));
+
+		// PB14 = D12 = R3
+		GPIOB->MODER &= ~(3UL << (14 * 2));
+		GPIOB->MODER |= (1UL << (14 * 2));
+		GPIOB->PUPDR &= ~(3UL << (14 * 2));
+
+		// PB15 = D11 = R4
+		GPIOB->MODER &= ~(3UL << (15 * 2));
+		GPIOB->MODER |= (1UL << (15 * 2));
+		GPIOB->PUPDR &= ~(3UL << (15 * 2));
+
+		// Set all columns as digital inputs w/ pull up resistor
+		// PI1  = D13 = C1
+		GPIOI->MODER &= ~(3UL << (1 * 2));
+		GPIOI->PUPDR &= ~(3UL << (1 * 2));
+		GPIOI->PUPDR |=  (1UL << (1 * 2));
+
+		// PI2  = D8  = C2
+		GPIOI->MODER &= ~(3UL << (2 * 2));
+		GPIOI->PUPDR &= ~(3UL << (2 * 2));
+		GPIOI->PUPDR |=  (1UL << (2 * 2));
+
+		// PI3  = D7  = C3
+		GPIOI->MODER &= ~(3UL << (3 * 2));
+		GPIOI->PUPDR &= ~(3UL << (3 * 2));
+		GPIOI->PUPDR |=  (1UL << (3 * 2));
+
+		// PI0  = D5  = C4
+		GPIOI->MODER &= ~(3UL << (0 * 2));
+		GPIOI->PUPDR &= ~(3UL << (0 * 2));
+		GPIOI->PUPDR |=  (1UL << (0 * 2));
+
+		// Drive all rows low
+		GPIOB->BSRR = (1UL << (8 + 16));
+		GPIOB->BSRR = (1UL << (9 + 16));
+		GPIOB->BSRR = (1UL << (14 + 16));
+		GPIOB->BSRR = (1UL << (15 + 16));
 
 		EXTI->PR = (1UL << 0); // Clear EXTI pending flag
 		NVIC->ICPR[0] = (1UL << 6);   // Clear NVIC Pending bit for IRQ6
