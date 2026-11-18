@@ -140,6 +140,21 @@ void keypad_idle_state(void)
  */
 char keypad_scan(unsigned int col)
 {
+    if (col >= 4) return 0;
+
+    // Column index -> pin: C1 = PI1, C2 = PI2, C3 = PI3, C4 = PI0
+    unsigned int pin = (col + 1) % 4;
+
+    // Drive ONLY the triggered column low (set ODR before switching to output).
+    // It's already being held low through the pressed key, so this makes no edge.
+    // The other columns stay pull-up inputs, so they see no falling edge and
+    // don't fire false interrupts.
+    // Done before flipping the rows so the column is never left floating high.
+    GPIOI->BSRR = (1UL << (pin + 16));
+    GPIOI->MODER &= ~(3UL << (pin * 2));
+    GPIOI->MODER |=  (1UL << (pin * 2));
+    GPIOI->PUPDR &= ~(3UL << (pin * 2));
+
     // Flip rows to inputs with pull-up resistors
     // PB8  = D15 = R1
     GPIOB->MODER &= ~(3UL << (8 * 2));
@@ -160,33 +175,6 @@ char keypad_scan(unsigned int col)
     GPIOB->MODER &= ~(3UL << (15 * 2));
     GPIOB->PUPDR &= ~(3UL << (15 * 2));
     GPIOB->PUPDR |= (1UL << (15 * 2));
-
-    // Drive all cols low (set ODR before switching to output)
-    GPIOI->BSRR = (1UL << (0 + 16));
-    GPIOI->BSRR = (1UL << (1 + 16));
-    GPIOI->BSRR = (1UL << (2 + 16));
-    GPIOI->BSRR = (1UL << (3 + 16));
-
-    // Flip columns to outputs
-    // PI1  = D13 = C1
-    GPIOI->MODER &= ~(3UL << (1 * 2));
-    GPIOI->MODER |= (1UL << (1 * 2));
-    GPIOI->PUPDR &= ~(3UL << (1 * 2));
-
-    // PI2  = D8  = C2
-    GPIOI->MODER &= ~(3UL << (2 * 2));
-    GPIOI->MODER |= (1UL << (2 * 2));
-    GPIOI->PUPDR &= ~(3UL << (2 * 2));
-
-    // PI3  = D7  = C3
-    GPIOI->MODER &= ~(3UL << (3 * 2));
-    GPIOI->MODER |= (1UL << (3 * 2));
-    GPIOI->PUPDR &= ~(3UL << (3 * 2));
-
-    // PI0  = D5  = C4
-    GPIOI->MODER &= ~(3UL << (0 * 2));
-    GPIOI->MODER |= (1UL << (0 * 2));
-    GPIOI->PUPDR &= ~(3UL << (0 * 2));
 
     // Short delay so the row pull-ups can settle
     for (volatile int d = 0; d < 50; d++);
@@ -495,7 +483,7 @@ void EXTI0_IRQHandler(void) {
 
 		keypad_idle_state();
 
-		EXTI->PR = (1UL << 0); // Clear EXTI pending flag
+		EXTI->PR = 0xFUL; // Clear EXTI lines 0-3 (this key + any edges caused by the scan)
 		NVIC->ICPR[0] = (1UL << 6);   // Clear NVIC Pending bit for IRQ6
     }
 }
@@ -514,7 +502,7 @@ void EXTI1_IRQHandler(void) {
 
 		keypad_idle_state();
 
-		EXTI->PR = (1UL << 1); // Clear EXTI pending flag
+		EXTI->PR = 0xFUL; // Clear EXTI lines 0-3 (this key + any edges caused by the scan)
 		NVIC->ICPR[0] = (1UL << 7);   // Clear NVIC Pending bit for IRQ7
     }
 }
@@ -533,7 +521,7 @@ void EXTI2_IRQHandler(void) {
 
 		keypad_idle_state();
 
-		EXTI->PR = (1UL << 2); // Clear EXTI pending flag
+		EXTI->PR = 0xFUL; // Clear EXTI lines 0-3 (this key + any edges caused by the scan)
 		NVIC->ICPR[0] = (1UL << 8);   // Clear NVIC Pending bit for IRQ8
     }
 }
@@ -552,7 +540,7 @@ void EXTI3_IRQHandler(void) {
 
 		keypad_idle_state();
 
-		EXTI->PR = (1UL << 3); // Clear EXTI pending flag
+		EXTI->PR = 0xFUL; // Clear EXTI lines 0-3 (this key + any edges caused by the scan)
 		NVIC->ICPR[0] = (1UL << 9);   // Clear NVIC Pending bit for IRQ9
     }
 }
