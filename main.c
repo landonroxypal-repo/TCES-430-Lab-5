@@ -26,6 +26,23 @@
 
 uint8_t col_hits[4] = {0};
 
+// Passed from the keypad ISRs to the main loop
+volatile char last_key = 0;     // Most recent key pressed
+volatile uint8_t key_ready = 0; // Set by ISR, cleared by main loop
+
+// LCD control line macros
+#define EN_HIGH()   (GPIOA->BSRR = (1UL << 15))
+#define EN_LOW()    (GPIOA->BSRR = (1UL << (15 + 16)))
+
+#define RS_HIGH()   (GPIOA->BSRR = (1UL << 8))
+#define RS_LOW()    (GPIOA->BSRR = (1UL << (8 + 16)))
+
+// Buzzer macros
+#define BUZZER_ON()  (GPIOB->BSRR = (1UL << 4))
+#define BUZZER_OFF() (GPIOB->BSRR = (1UL << (4 + 16)))
+
+#define BEEP_MS 100  // Length of a keypress beep
+
 const unsigned char key_val[4][4] = {
 		{'1', '2', '3', 'A'},
 		{'4', '5', '6', 'B'},
@@ -43,6 +60,15 @@ const unsigned char key_val[4][4] = {
  * PB9  = D14 = R2
  * PB14 = D12 = R3
  * PB15 = D11 = R4
+ *
+ * PF6  = A5  = LCD D4
+ * PF7  = A4  = LCD D5
+ * PF8  = A3  = LCD D6
+ * PF9  = A2  = LCD D7
+ * PA8  = D10 = LCD RS
+ * PA15 = D9  = LCD E
+ *
+ * PB4  = D3  = Buzzer
  * */
 
 /*
@@ -182,18 +208,179 @@ char keypad_scan(unsigned int col)
     return 0;
 }
 
+// TIM3 free-runs at 1 tick/ms, so we only read it and never start/stop/reset it.
+// This makes it safe to call from main AND from an ISR that interrupts a delay.
+void TIM3_DelayMs(uint32_t ms) {
+    if (ms == 0) return;
+
+    uint16_t start = TIM3->CNT;
+
+    // <= so at least 'ms' full ticks pass (the first tick may be partial)
+    while ((uint16_t)(TIM3->CNT - start) <= ms);
+}
+
+void LCD_Nibble(uint8_t data, uint8_t regsel) {
+    if (regsel) {
+        RS_HIGH();
+    } else {
+        RS_LOW();
+    }
+
+    // Configure each bit:
+    // D4 = PF6
+    if (data & 0x01) {
+        GPIOF->BSRR = (1UL << 6);
+    } else {
+        GPIOF->BSRR = (1UL << (6 + 16));
+    }
+
+    // D5 = PF7
+    if (data & 0x02) {
+        GPIOF->BSRR = (1UL << 7);
+    } else {
+        GPIOF->BSRR = (1UL << (7 + 16));
+    }
+
+    // D6 = PF8
+    if (data & 0x04) {
+        GPIOF->BSRR = (1UL << 8);
+    } else {
+        GPIOF->BSRR = (1UL << (8 + 16));
+    }
+
+    // D7 = PF9
+    if (data & 0x08) {
+        GPIOF->BSRR = (1UL << 9);
+    } else {
+        GPIOF->BSRR = (1UL << (9 + 16));
+    }
+
+    // Cycle Enable pulse to latch!
+    EN_HIGH();
+    TIM3_DelayMs(2); // Setup time is 1 ms
+    EN_LOW(); // LATCH!
+    TIM3_DelayMs(2);
+}
+
+// Interrupts are blocked while a byte is sent so an ISR can't split the two nibbles
+// (that knocks the LCD out of 4-bit sync). PRIMASK is restored, not just re-enabled,
+// so this also works when called from inside an ISR.
+void LCD_Cmd(uint8_t cmd) {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    LCD_Nibble(cmd >> 4, 0);
+    LCD_Nibble(cmd & 0x0F, 0);
+    __set_PRIMASK(primask);
+}
+
+void LCD_Data(uint8_t data) {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    LCD_Nibble(data >> 4, 1);
+    LCD_Nibble(data & 0x0F, 1);
+    __set_PRIMASK(primask);
+}
+
+void LCD_Initialize(void) {
+    // Wait for VDD stability
+    TIM3_DelayMs(100);
+
+    // HD44780 4-bit mode
+    LCD_Nibble(0x03, 0);
+    TIM3_DelayMs(10);
+    LCD_Nibble(0x03, 0);
+    TIM3_DelayMs(2);
+    LCD_Nibble(0x03, 0);
+    TIM3_DelayMs(2);
+
+    LCD_Nibble(0x02, 0);
+    TIM3_DelayMs(2);
+
+    // Now that the LCD is in 4-bit mode, initialize commands!
+    LCD_Cmd(0x28); // 4-bit mode configuration
+    LCD_Cmd(0x0C); // Display ON, hide cursor
+    LCD_Cmd(0x06); // Increment write address
+    LCD_Cmd(0x01); // Execute clear layout
+    TIM3_DelayMs(5);
+}
+
+// Send each character through and do pointer arithmetic
+void LCD_DisplayString(char *str) {
+    LCD_Cmd(0x01); // Execute clear layout
+
+    while (*str) {
+        LCD_Data(*str++);
+    }
+}
+
 int main(void)
 {
     // Init registers
 
-	// Enable port I, then enable port B
-	RCC->AHB1ENR |= (1UL << 8) | (1UL << 1);
+	// Bit 8 = GPIOI, Bit 5 = GPIOF, Bit 1 = GPIOB, Bit 0 = GPIOA
+	RCC->AHB1ENR |= (1UL << 8) | (1UL << 5) | (1UL << 1) | (1UL << 0);
 
     // Bit 14 enables SYSCFG clock (for routing GPIO to EXTI)
     RCC->APB2ENR |= (1UL << 14);
 
+    // Bit 1 enables TIM3 clock on the APB1 bus
+    RCC->APB1ENR |= (1UL << 1);
+
     // Initialize GPIO pins (rows low outputs, columns pull-up inputs)
     keypad_idle_state();
+
+    // LCD D4 (PF6, A5) -> Output
+    GPIOF->MODER  &= ~(3UL << (6 * 2));
+    GPIOF->MODER  |=  (1UL << (6 * 2));
+    GPIOF->OTYPER &= ~(1UL << 6);
+    GPIOF->OSPEEDR |= (3UL << (6 * 2));
+
+    // LCD D5 (PF7, A4) -> Output
+    GPIOF->MODER  &= ~(3UL << (7 * 2));
+    GPIOF->MODER  |=  (1UL << (7 * 2));
+    GPIOF->OTYPER &= ~(1UL << 7);
+    GPIOF->OSPEEDR |= (3UL << (7 * 2));
+
+    // LCD D6 (PF8, A3) -> Output
+    GPIOF->MODER  &= ~(3UL << (8 * 2));
+    GPIOF->MODER  |=  (1UL << (8 * 2));
+    GPIOF->OTYPER &= ~(1UL << 8);
+    GPIOF->OSPEEDR |= (3UL << (8 * 2));
+
+    // LCD D7 (PF9, A2) -> Output
+    GPIOF->MODER  &= ~(3UL << (9 * 2));
+    GPIOF->MODER  |=  (1UL << (9 * 2));
+    GPIOF->OTYPER &= ~(1UL << 9);
+    GPIOF->OSPEEDR |= (3UL << (9 * 2));
+
+    // LCD RS (PA8, D10) -> Output
+    GPIOA->MODER  &= ~(3UL << (8 * 2));
+    GPIOA->MODER  |=  (1UL << (8 * 2));
+    GPIOA->OTYPER &= ~(1UL << 8);
+
+    // LCD E (PA15, D9) -> Output
+    GPIOA->MODER  &= ~(3UL << (15 * 2));
+    GPIOA->MODER  |=  (1UL << (15 * 2));
+    GPIOA->OTYPER &= ~(1UL << 15);
+
+    // Buzzer (PB4, D3) -> Output, start off
+    BUZZER_OFF();
+    GPIOB->MODER  &= ~(3UL << (4 * 2));
+    GPIOB->MODER  |=  (1UL << (4 * 2));
+    GPIOB->OTYPER &= ~(1UL << 4);
+
+    // ------------------------------------------------------------
+    // TIMER 3 CONFIGURATION (free-running 1 ms ticker)
+    // ------------------------------------------------------------
+    // Timer 3 is 16-bit!!
+    TIM3->PSC = 15999;        // Assumes 16MHz timer clock -> 1 tick per ms
+    TIM3->ARR = 0xFFFF;       // Free-running, wraps every ~65 s
+    TIM3->EGR |= TIM_EGR_UG;  // Forces an update event to latch Prescaler value into hw registers
+    TIM3->CR1 |= TIM_CR1_CEN; // Left running forever; TIM3_DelayMs only reads CNT
+
+    LCD_Initialize();
+    LCD_DisplayString("Enter PIN:");
+    LCD_Cmd(0xC0); // Move cursor to start of line 2 for the asterisks
 
     // Configure EXTI0
     SYSCFG->EXTICR[0] &= ~(0xFUL << (0 * 4));
@@ -235,7 +422,31 @@ int main(void)
 
     NVIC->ISER[0] |= (1UL << 9);         //Enable IRQ 9
 
-    while (1) {};
+    uint8_t beeping = 0;      // 1 while the buzzer is on
+    uint16_t beep_start = 0;  // TIM3->CNT when the beep started
+
+    while (1) {
+        // ------------------------------------------------------------
+        // MAIN LOOP STEP A: New keypress from the ISR
+        // ------------------------------------------------------------
+        if (key_ready) {
+            key_ready = 0;
+
+            LCD_Data('*'); // Mask the key on line 2
+
+            BUZZER_ON();
+            beep_start = TIM3->CNT;
+            beeping = 1;
+        }
+
+        // ------------------------------------------------------------
+        // MAIN LOOP STEP B: Non-blocking beep timeout
+        // ------------------------------------------------------------
+        if (beeping && (uint16_t)(TIM3->CNT - beep_start) >= BEEP_MS) {
+            BUZZER_OFF();
+            beeping = 0;
+        }
+    }
 }
 
 void EXTI0_IRQHandler(void) {
@@ -243,7 +454,12 @@ void EXTI0_IRQHandler(void) {
 
 		col_hits[0]++;
 
-		char last_key = keypad_scan(3);   // PI0 = C4
+		char key = keypad_scan(3);   // PI0 = C4
+
+		if (key) {
+		    last_key = key;
+		    key_ready = 1;
+		}
 
 		keypad_idle_state();
 
@@ -255,28 +471,56 @@ void EXTI0_IRQHandler(void) {
 void EXTI1_IRQHandler(void) {
     if (EXTI->PR & (1UL << 1)) {
 
-     col_hits[1]++;
+		col_hits[1]++;
 
-	 EXTI->PR = (1UL << 1); // Clear EXTI pending flag
-	 NVIC->ICPR[0] = (1UL << 7);   // Clear NVIC Pending bit for IRQ7
+		char key = keypad_scan(0);   // PI1 = C1
+
+		if (key) {
+		    last_key = key;
+		    key_ready = 1;
+		}
+
+		keypad_idle_state();
+
+		EXTI->PR = (1UL << 1); // Clear EXTI pending flag
+		NVIC->ICPR[0] = (1UL << 7);   // Clear NVIC Pending bit for IRQ7
     }
 }
 
 void EXTI2_IRQHandler(void) {
     if (EXTI->PR & (1UL << 2)) {
 
-     col_hits[2]++;
+		col_hits[2]++;
 
-	 EXTI->PR = (1UL << 2); // Clear EXTI pending flag
-	 NVIC->ICPR[0] = (1UL << 8);   // Clear NVIC Pending bit for IRQ8
+		char key = keypad_scan(1);   // PI2 = C2
+
+		if (key) {
+		    last_key = key;
+		    key_ready = 1;
+		}
+
+		keypad_idle_state();
+
+		EXTI->PR = (1UL << 2); // Clear EXTI pending flag
+		NVIC->ICPR[0] = (1UL << 8);   // Clear NVIC Pending bit for IRQ8
     }
 }
 
 void EXTI3_IRQHandler(void) {
-    if (EXTI->PR & (1UL <<3)) {
-   	 col_hits[3]++;
+    if (EXTI->PR & (1UL << 3)) {
 
-	 EXTI->PR = (1UL << 3); // Clear EXTI pending flag
-	 NVIC->ICPR[0] = (1UL << 9);   // Clear NVIC Pending bit for IRQ9
+		col_hits[3]++;
+
+		char key = keypad_scan(2);   // PI3 = C3
+
+		if (key) {
+		    last_key = key;
+		    key_ready = 1;
+		}
+
+		keypad_idle_state();
+
+		EXTI->PR = (1UL << 3); // Clear EXTI pending flag
+		NVIC->ICPR[0] = (1UL << 9);   // Clear NVIC Pending bit for IRQ9
     }
 }
