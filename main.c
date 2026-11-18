@@ -24,6 +24,8 @@
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
 
+uint_8 col_hits[3] = {0};
+
 /*
  * Pinout:
  * PI1  = D13 = C1
@@ -74,33 +76,33 @@ int main(void)
     GPIOB->MODER &= ~(3UL << (8 * 2));
     GPIOB->MODER |= (1UL << (8 * 2));
     GPIOB->PUPDR &= ~(3UL << (8 * 2));
-    GPIOB->ODR &= ~(0UL << 8);
+    GPIOB->BSRR = (1UL << (8 + 16));
 
     // PB9  = D14 = R2
     GPIOB->MODER &= ~(3UL << (9 * 2));
     GPIOB->MODER |= (1UL << (9 * 2));
     GPIOB->PUPDR &= ~(3UL << (9 * 2));
-    GPIOB->ODR &= ~(0UL << 9);
+    GPIOB->BSRR = (1UL << (9 + 16));
 
     // PB14 = D12 = R3
     GPIOB->MODER &= ~(3UL << (14 * 2));
     GPIOB->MODER |= (1UL << (14 * 2));
     GPIOB->PUPDR &= ~(3UL << (14 * 2));
-    GPIOB->ODR &= ~(0UL << 14);
+    GPIOB->BSRR = (1UL << (14 + 16));
 
     // PB15 = D11 = R4
     GPIOB->MODER &= ~(3UL << (15 * 2));
     GPIOB->MODER |= (1UL << (15 * 2));
     GPIOB->PUPDR &= ~(3UL << (15 * 2));
-    GPIOB->ODR &= ~(0UL << 15);
+    GPIOB->BSRR = (1UL << (15 + 16));
 
     // Configure EXTI0
     SYSCFG->EXTICR[0] &= ~(0xFUL << (0 * 4));
     SYSCFG->EXTICR[0] |=  (0x8UL << (0 * 4));
 
     EXTI->IMR  |= (1UL << 0);  // Unmask line 0
-    EXTI->FTSR |= ~(1UL << 0);  // Disable fall register
-    EXTI->RTSR |= (1UL << 0); // Enable rise register
+    EXTI->FTSR |= (1UL << 0);  // Enable fall register
+    EXTI->RTSR &= ~(1UL << 0); // Disable rise register
 
     NVIC->ISER[0] |= (1UL << 6);         //Enable IRQ 6
 
@@ -109,8 +111,8 @@ int main(void)
     SYSCFG->EXTICR[0] |=  (0x8UL << (1 * 4));
 
     EXTI->IMR  |= (1UL << 1);  // Unmask line 1
-    EXTI->FTSR |= ~(1UL << 1);  // Disable fall register
-    EXTI->RTSR |= (1UL << 1); // Enable rise register
+    EXTI->FTSR |= (1UL << 1);  // Enable fall register
+    EXTI->RTSR &= ~(1UL << 1); // Disable rise register
 
     NVIC->ISER[0] |= (1UL << 7);         //Enable IRQ 7
 
@@ -119,8 +121,8 @@ int main(void)
     SYSCFG->EXTICR[0] |=  (0x8UL << (2 * 4));
 
     EXTI->IMR  |= (1UL << 2);  // Unmask line 2
-    EXTI->FTSR |= ~(1UL << 2);  // Disable fall register
-    EXTI->RTSR |= (1UL << 2); // Enable rise register
+    EXTI->FTSR |= (1UL << 2);  // Enable fall register
+    EXTI->RTSR &= ~(1UL << 2); // Disable rise register
 
     NVIC->ISER[0] |= (1UL << 8);         //Enable IRQ 8
 
@@ -129,14 +131,18 @@ int main(void)
     SYSCFG->EXTICR[0] |=  (0x8UL << (3 * 4));
 
     EXTI->IMR  |= (1UL << 3);  // Unmask line 3
-    EXTI->FTSR |= ~(1UL << 3);  // Disable fall register
-    EXTI->RTSR |= (1UL << 3); // Enable rise register
+    EXTI->FTSR |= (1UL << 3);  // Enable fall register
+    EXTI->RTSR &= ~(1UL << 3); // Disable rise register
 
     NVIC->ISER[0] |= (1UL << 9);         //Enable IRQ 9
+
+    while (1) {};
 }
 
 void EXTI0_IRQHandler(void) {
     if (EXTI->PR & (1UL << 0)) {
+
+    col_hits[0]++;
 
 	 EXTI->PR = (1UL << 0); // Clear EXTI pending flag
 	 NVIC->ICPR[0] = (1UL << 6);   // Clear NVIC Pending bit for IRQ6
@@ -146,6 +152,8 @@ void EXTI0_IRQHandler(void) {
 void EXTI1_IRQHandler(void) {
     if (EXTI->PR & (1UL << 1)) {
 
+     col_hits[1]++;
+
 	 EXTI->PR = (1UL << 1); // Clear EXTI pending flag
 	 NVIC->ICPR[0] = (1UL << 7);   // Clear NVIC Pending bit for IRQ7
     }
@@ -154,6 +162,8 @@ void EXTI1_IRQHandler(void) {
 void EXTI2_IRQHandler(void) {
     if (EXTI->PR & (1UL << 2)) {
 
+     col_hits[2]++;
+
 	 EXTI->PR = (1UL << 2); // Clear EXTI pending flag
 	 NVIC->ICPR[0] = (1UL << 8);   // Clear NVIC Pending bit for IRQ8
     }
@@ -161,6 +171,7 @@ void EXTI2_IRQHandler(void) {
 
 void EXTI3_IRQHandler(void) {
     if (EXTI->PR & (1UL <<3)) {
+   	 col_hits[3]++;
 
 	 EXTI->PR = (1UL << 3); // Clear EXTI pending flag
 	 NVIC->ICPR[0] = (1UL << 9);   // Clear NVIC Pending bit for IRQ9
