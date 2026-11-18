@@ -69,26 +69,30 @@ int main(void)
     GPIOI->PUPDR &= ~(3UL << (0 * 2));
     GPIOI->PUPDR |=  (1UL << (0 * 2));
 
-    // Set all rows as digital outputs
+    // Set all rows as digital outputs, drive all low
     // PB8  = D15 = R1
-    GPIOI->MODER &= ~(3UL << (8 * 2));
-    GPIOI->MODER |= (1UL << (8 * 2));
-    GPIOI->PUPDR &= ~(3UL << (8 * 2));
+    GPIOB->MODER &= ~(3UL << (8 * 2));
+    GPIOB->MODER |= (1UL << (8 * 2));
+    GPIOB->PUPDR &= ~(3UL << (8 * 2));
+    GPIOB->ODR &= ~(0UL << 8);
 
     // PB9  = D14 = R2
-    GPIOI->MODER &= ~(3UL << (9 * 2));
-    GPIOI->MODER |= (1UL << (9 * 2));
-    GPIOI->PUPDR &= ~(3UL << (9 * 2));
+    GPIOB->MODER &= ~(3UL << (9 * 2));
+    GPIOB->MODER |= (1UL << (9 * 2));
+    GPIOB->PUPDR &= ~(3UL << (9 * 2));
+    GPIOB->ODR &= ~(0UL << 9);
 
     // PB14 = D12 = R3
-    GPIOI->MODER &= ~(3UL << (14 * 2));
-    GPIOI->MODER |= (1UL << (14 * 2));
-    GPIOI->PUPDR &= ~(3UL << (14 * 2));
+    GPIOB->MODER &= ~(3UL << (14 * 2));
+    GPIOB->MODER |= (1UL << (14 * 2));
+    GPIOB->PUPDR &= ~(3UL << (14 * 2));
+    GPIOB->ODR &= ~(0UL << 14);
 
     // PB15 = D11 = R4
-    GPIOI->MODER &= ~(3UL << (15 * 2));
-    GPIOI->MODER |= (1UL << (15 * 2));
-    GPIOI->PUPDR &= ~(3UL << (15 * 2));
+    GPIOB->MODER &= ~(3UL << (15 * 2));
+    GPIOB->MODER |= (1UL << (15 * 2));
+    GPIOB->PUPDR &= ~(3UL << (15 * 2));
+    GPIOB->ODR &= ~(0UL << 15);
 
     // Configure EXTI0
     SYSCFG->EXTICR[0] &= ~(0xFUL << (0 * 4));
@@ -124,7 +128,7 @@ int main(void)
     SYSCFG->EXTICR[0] &= ~(0xFUL << (3 * 4));
     SYSCFG->EXTICR[0] |=  (0x8UL << (3 * 4));
 
-    EXTI->IMR  |= (1UL << 3);  // Unmask line 2
+    EXTI->IMR  |= (1UL << 3);  // Unmask line 3
     EXTI->FTSR |= ~(1UL << 3);  // Disable fall register
     EXTI->RTSR |= (1UL << 3); // Enable rise register
 
