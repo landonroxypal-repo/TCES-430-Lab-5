@@ -24,7 +24,7 @@
   #warning "FPU is not initialized, but the project is compiling for an FPU. Please initialize the FPU before use."
 #endif
 
-uint_8 col_hits[3] = {0};
+uint8_t col_hits[4] = {0};
 
 /*
  * Pinout:
@@ -50,6 +50,26 @@ int main(void)
 
     // Initialize GPIO pins
 
+    // PB8  = D15 = R1
+    GPIOB->MODER &= ~(3UL << (8 * 2));
+    GPIOB->MODER |= (1UL << (8 * 2));
+    GPIOB->PUPDR &= ~(3UL << (8 * 2));
+
+    // PB9  = D14 = R2
+    GPIOB->MODER &= ~(3UL << (9 * 2));
+    GPIOB->MODER |= (1UL << (9 * 2));
+    GPIOB->PUPDR &= ~(3UL << (9 * 2));
+
+    // PB14 = D12 = R3
+    GPIOB->MODER &= ~(3UL << (14 * 2));
+    GPIOB->MODER |= (1UL << (14 * 2));
+    GPIOB->PUPDR &= ~(3UL << (14 * 2));
+
+    // PB15 = D11 = R4
+    GPIOB->MODER &= ~(3UL << (15 * 2));
+    GPIOB->MODER |= (1UL << (15 * 2));
+    GPIOB->PUPDR &= ~(3UL << (15 * 2));
+
     // Set all columns as digital inputs w/ pull up resistor
     // PI1  = D13 = C1
     GPIOI->MODER &= ~(3UL << (1 * 2));
@@ -71,29 +91,10 @@ int main(void)
     GPIOI->PUPDR &= ~(3UL << (0 * 2));
     GPIOI->PUPDR |=  (1UL << (0 * 2));
 
-    // Set all rows as digital outputs, drive all low
-    // PB8  = D15 = R1
-    GPIOB->MODER &= ~(3UL << (8 * 2));
-    GPIOB->MODER |= (1UL << (8 * 2));
-    GPIOB->PUPDR &= ~(3UL << (8 * 2));
+    // Drive all rows low
     GPIOB->BSRR = (1UL << (8 + 16));
-
-    // PB9  = D14 = R2
-    GPIOB->MODER &= ~(3UL << (9 * 2));
-    GPIOB->MODER |= (1UL << (9 * 2));
-    GPIOB->PUPDR &= ~(3UL << (9 * 2));
     GPIOB->BSRR = (1UL << (9 + 16));
-
-    // PB14 = D12 = R3
-    GPIOB->MODER &= ~(3UL << (14 * 2));
-    GPIOB->MODER |= (1UL << (14 * 2));
-    GPIOB->PUPDR &= ~(3UL << (14 * 2));
     GPIOB->BSRR = (1UL << (14 + 16));
-
-    // PB15 = D11 = R4
-    GPIOB->MODER &= ~(3UL << (15 * 2));
-    GPIOB->MODER |= (1UL << (15 * 2));
-    GPIOB->PUPDR &= ~(3UL << (15 * 2));
     GPIOB->BSRR = (1UL << (15 + 16));
 
     // Configure EXTI0
