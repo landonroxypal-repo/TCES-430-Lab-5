@@ -37,11 +37,16 @@ volatile uint8_t key_ready = 0; // Set by ISR, cleared by main loop
 #define RS_HIGH()   (GPIOA->BSRR = (1UL << 8))
 #define RS_LOW()    (GPIOA->BSRR = (1UL << (8 + 16)))
 
-// Buzzer macros
-#define BUZZER_ON()  (GPIOB->BSRR = (1UL << 4))
-#define BUZZER_OFF() (GPIOB->BSRR = (1UL << (4 + 16)))
+// Passive buzzer is driven by TIM3 CH1 PWM on PB4 (2 kHz square wave).
+// The timer always runs; "off" just sets the duty cycle to 0%.
+#define BUZZER_PERIOD 500  // 1 MHz timer tick / 500 = 2 kHz tone
+#define BUZZER_ON()  (TIM3->CCR1 = BUZZER_PERIOD / 2) // 50% duty -> tone
+#define BUZZER_OFF() (TIM3->CCR1 = 0)                 // 0% duty  -> silent (pin low)
 
-#define BEEP_MS 100  // Length of a keypress beep
+// Buzzer durations from the lab instructions
+#define BEEP_MS          100   // Short beep on every keypress
+#define GRANTED_TONE_MS  2000  // Continuous 2-second tone on Access Granted
+#define LOCKOUT_PULSE_MS 500   // Pulse on alternating seconds during the lockout countdown
 
 const unsigned char key_val[4][4] = {
 		{'1', '2', '3', 'A'},
@@ -208,15 +213,36 @@ char keypad_scan(unsigned int col)
     return 0;
 }
 
-// TIM3 free-runs at 1 tick/ms, so we only read it and never start/stop/reset it.
+// TIM4 free-runs at 1 tick/ms, so we only read it and never start/stop/reset it.
 // This makes it safe to call from main AND from an ISR that interrupts a delay.
-void TIM3_DelayMs(uint32_t ms) {
+void TIM4_DelayMs(uint32_t ms) {
     if (ms == 0) return;
 
-    uint16_t start = TIM3->CNT;
+    uint16_t start = TIM4->CNT;
 
     // <= so at least 'ms' full ticks pass (the first tick may be partial)
-    while ((uint16_t)(TIM3->CNT - start) <= ms);
+    while ((uint16_t)(TIM4->CNT - start) <= ms);
+}
+
+// Buzzer state for non-blocking beeps (checked by the main loop)
+static uint8_t  buzzer_active = 0; // 1 while the tone is playing
+static uint16_t buzzer_start  = 0; // TIM4->CNT when the tone started
+static uint16_t buzzer_len    = 0; // How long the tone should last (ms)
+
+// Start a tone that lasts 'ms' milliseconds. Returns immediately.
+void Buzzer_Beep(uint16_t ms) {
+    BUZZER_ON();
+    buzzer_start  = TIM4->CNT;
+    buzzer_len    = ms;
+    buzzer_active = 1;
+}
+
+// Poll from the main loop: turns the tone off once its time is up.
+void Buzzer_Update(void) {
+    if (buzzer_active && (uint16_t)(TIM4->CNT - buzzer_start) >= buzzer_len) {
+        BUZZER_OFF();
+        buzzer_active = 0;
+    }
 }
 
 void LCD_Nibble(uint8_t data, uint8_t regsel) {
@@ -257,9 +283,9 @@ void LCD_Nibble(uint8_t data, uint8_t regsel) {
 
     // Cycle Enable pulse to latch!
     EN_HIGH();
-    TIM3_DelayMs(2); // Setup time is 1 ms
+    TIM4_DelayMs(2); // Setup time is 1 ms
     EN_LOW(); // LATCH!
-    TIM3_DelayMs(2);
+    TIM4_DelayMs(2);
 }
 
 // Interrupts are blocked while a byte is sent so an ISR can't split the two nibbles
@@ -283,25 +309,25 @@ void LCD_Data(uint8_t data) {
 
 void LCD_Initialize(void) {
     // Wait for VDD stability
-    TIM3_DelayMs(100);
+    TIM4_DelayMs(100);
 
     // HD44780 4-bit mode
     LCD_Nibble(0x03, 0);
-    TIM3_DelayMs(10);
+    TIM4_DelayMs(10);
     LCD_Nibble(0x03, 0);
-    TIM3_DelayMs(2);
+    TIM4_DelayMs(2);
     LCD_Nibble(0x03, 0);
-    TIM3_DelayMs(2);
+    TIM4_DelayMs(2);
 
     LCD_Nibble(0x02, 0);
-    TIM3_DelayMs(2);
+    TIM4_DelayMs(2);
 
     // Now that the LCD is in 4-bit mode, initialize commands!
     LCD_Cmd(0x28); // 4-bit mode configuration
     LCD_Cmd(0x0C); // Display ON, hide cursor
     LCD_Cmd(0x06); // Increment write address
     LCD_Cmd(0x01); // Execute clear layout
-    TIM3_DelayMs(5);
+    TIM4_DelayMs(5);
 }
 
 // Send each character through and do pointer arithmetic
@@ -323,8 +349,8 @@ int main(void)
     // Bit 14 enables SYSCFG clock (for routing GPIO to EXTI)
     RCC->APB2ENR |= (1UL << 14);
 
-    // Bit 1 enables TIM3 clock on the APB1 bus
-    RCC->APB1ENR |= (1UL << 1);
+    // Bit 1 enables TIM3 clock (buzzer PWM), Bit 2 enables TIM4 clock (1 ms ticker)
+    RCC->APB1ENR |= (1UL << 1) | (1UL << 2);
 
     // Initialize GPIO pins (rows low outputs, columns pull-up inputs)
     keypad_idle_state();
@@ -363,20 +389,35 @@ int main(void)
     GPIOA->MODER  |=  (1UL << (15 * 2));
     GPIOA->OTYPER &= ~(1UL << 15);
 
-    // Buzzer (PB4, D3) -> Output, start off
-    BUZZER_OFF();
+    // Buzzer (PB4, D3) -> Alternate function 2 (TIM3_CH1)
     GPIOB->MODER  &= ~(3UL << (4 * 2));
-    GPIOB->MODER  |=  (1UL << (4 * 2));
+    GPIOB->MODER  |=  (2UL << (4 * 2));   // 10 = alternate function
     GPIOB->OTYPER &= ~(1UL << 4);
+    GPIOB->AFR[0] &= ~(0xFUL << (4 * 4));
+    GPIOB->AFR[0] |=  (0x2UL << (4 * 4)); // AF2 = TIM3_CH1
 
     // ------------------------------------------------------------
-    // TIMER 3 CONFIGURATION (free-running 1 ms ticker)
+    // TIMER 4 CONFIGURATION (free-running 1 ms ticker)
     // ------------------------------------------------------------
-    // Timer 3 is 16-bit!!
-    TIM3->PSC = 15999;        // Assumes 16MHz timer clock -> 1 tick per ms
-    TIM3->ARR = 0xFFFF;       // Free-running, wraps every ~65 s
-    TIM3->EGR |= TIM_EGR_UG;  // Forces an update event to latch Prescaler value into hw registers
-    TIM3->CR1 |= TIM_CR1_CEN; // Left running forever; TIM3_DelayMs only reads CNT
+    // Timer 4 is 16-bit!!
+    TIM4->PSC = 15999;        // Assumes 16MHz timer clock -> 1 tick per ms
+    TIM4->ARR = 0xFFFF;       // Free-running, wraps every ~65 s
+    TIM4->EGR = TIM_EGR_UG;   // Forces an update event to latch Prescaler value into hw registers
+    TIM4->CR1 |= TIM_CR1_CEN; // Left running forever; TIM4_DelayMs only reads CNT
+
+    // ------------------------------------------------------------
+    // TIMER 3 CONFIGURATION (2 kHz PWM tone for the passive buzzer)
+    // ------------------------------------------------------------
+    TIM3->PSC  = 15;                  // 16 MHz / 16 = 1 MHz tick
+    TIM3->ARR  = BUZZER_PERIOD - 1;   // 1 MHz / 500 = 2 kHz period
+    TIM3->CCR1 = 0;                   // Start silent (0% duty)
+    TIM3->CCMR1 &= ~(TIM_CCMR1_OC1M | TIM_CCMR1_CC1S); // CH1 as output, clear mode
+    TIM3->CCMR1 |=  (6UL << 4);       // OC1M = 110 -> PWM mode 1
+    TIM3->CCMR1 |=  (1UL << 3);       // OC1PE: CCR1 changes apply at the next period (no glitches)
+    TIM3->CCER  |=  (1UL << 0);       // CC1E: connect CH1 to the pin
+    TIM3->CR1   |=  (1UL << 7);       // ARPE: buffer ARR
+    TIM3->EGR    =  TIM_EGR_UG;       // Latch PSC/ARR/CCR1
+    TIM3->CR1   |=  TIM_CR1_CEN;      // Run forever; BUZZER_ON/OFF only change CCR1
 
     LCD_Initialize();
     LCD_DisplayString("Enter PIN:");
@@ -422,9 +463,6 @@ int main(void)
 
     NVIC->ISER[0] |= (1UL << 9);         //Enable IRQ 9
 
-    uint8_t beeping = 0;      // 1 while the buzzer is on
-    uint16_t beep_start = 0;  // TIM3->CNT when the beep started
-
     while (1) {
         // ------------------------------------------------------------
         // MAIN LOOP STEP A: New keypress from the ISR
@@ -432,20 +470,14 @@ int main(void)
         if (key_ready) {
             key_ready = 0;
 
-            LCD_Data('*'); // Mask the key on line 2
-
-            BUZZER_ON();
-            beep_start = TIM3->CNT;
-            beeping = 1;
+            Buzzer_Beep(BEEP_MS); // Start the beep first so it lines up with the press
+            LCD_Data('*');        // Mask the key on line 2
         }
 
         // ------------------------------------------------------------
-        // MAIN LOOP STEP B: Non-blocking beep timeout
+        // MAIN LOOP STEP B: Non-blocking buzzer timeout
         // ------------------------------------------------------------
-        if (beeping && (uint16_t)(TIM3->CNT - beep_start) >= BEEP_MS) {
-            BUZZER_OFF();
-            beeping = 0;
-        }
+        Buzzer_Update();
     }
 }
 
