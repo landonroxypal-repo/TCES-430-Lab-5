@@ -202,10 +202,13 @@ void EXTI0_IRQHandler(void) {
 		GPIOI->BSRR = (1UL << (3 + 16));
 
 		unsigned int col = 3;
-		unsigned int row = 0;
+		unsigned int row = 0xFF;
 
 		// Enable column i
-		GPIOI->BSRR = (1UL << col);
+		GPIOI->BSRR = (1UL << 0);
+
+		// Short delay
+		for (volatile int d = 0; d < 50; d++);
 
 		// Check PB8  = D15 = R1
 		// Check PB9  = D14 = R2
@@ -223,7 +226,7 @@ void EXTI0_IRQHandler(void) {
 		}
 
 		// Disable column i
-		GPIOI->BSRR = (1UL << (col + 16));
+		GPIOI->BSRR = (1UL << (0 + 16));
 
 		char result = key_val[row][col];
 
