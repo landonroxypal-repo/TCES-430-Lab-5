@@ -37,9 +37,9 @@ volatile uint8_t key_ready = 0; // Set by ISR, cleared by main loop
 #define RS_HIGH()   (GPIOA->BSRR = (1UL << 8))
 #define RS_LOW()    (GPIOA->BSRR = (1UL << (8 + 16)))
 
-// Passive buzzer is driven by TIM3 CH1 PWM on PB4 (2 kHz square wave).
-// The timer always runs; "off" just sets the duty cycle to 0%.
-#define BUZZER_PERIOD 500  // 1 MHz timer tick / 500 = 2 kHz tone
+// Passive buzzer is driven by TIM3 CH1 PWM o20d 2.7 kHz, which is where they are loudest.
+// If yours is still quiet, try 333 (3 kHz), 400 (2.5 kHz) or 250 (4 kHz).
+#define BUZZER_PERIOD 250  // 1 MHz timer tick / 250 = 4 kHz tone
 #define BUZZER_ON()  (TIM3->CCR1 = BUZZER_PERIOD / 2) // 50% duty -> tone
 #define BUZZER_OFF() (TIM3->CCR1 = 0)                 // 0% duty  -> silent (pin low)
 
@@ -394,10 +394,10 @@ int main(void)
     TIM4->CR1 |= TIM_CR1_CEN; // Left running forever; TIM4_DelayMs only reads CNT
 
     // ------------------------------------------------------------
-    // TIMER 3 CONFIGURATION (2 kHz PWM tone for the passive buzzer)
+    // TIMER 3 CONFIGURATION (~2.7 kHz PWM tone for the passive buzzer)
     // ------------------------------------------------------------
     TIM3->PSC  = 15;                  // 16 MHz / 16 = 1 MHz tick
-    TIM3->ARR  = BUZZER_PERIOD - 1;   // 1 MHz / 500 = 2 kHz period
+    TIM3->ARR  = BUZZER_PERIOD - 1;   // 1 MHz / BUZZER_PERIOD = tone frequency
     TIM3->CCR1 = 0;                   // Start silent (0% duty)
     TIM3->CCMR1 &= ~(TIM_CCMR1_OC1M | TIM_CCMR1_CC1S); // CH1 as output, clear mode
     TIM3->CCMR1 |=  (6UL << 4);       // OC1M = 110 -> PWM mode 1
