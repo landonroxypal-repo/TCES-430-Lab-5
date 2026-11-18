@@ -44,18 +44,20 @@ const unsigned char key_val[4][4] = {
  * PB14 = D12 = R3
  * PB15 = D11 = R4
  * */
-int main(void)
+
+/*
+ * Phase 1 idle state:
+ *   Rows    = outputs driven low
+ *   Columns = inputs with pull-up resistors
+ * Call during init and after every scan.
+ */
+void keypad_idle_state(void)
 {
-	// DRIVE STUFF!!
-    // Init registers
-
-	// Enable port I, then enable port B
-	RCC->AHB1ENR |= (1UL << 8) | (1UL << 1);
-
-    // Bit 14 enables SYSCFG clock (for routing GPIO to EXTI)
-    RCC->APB2ENR |= (1UL << 14);
-
-    // Initialize GPIO pins
+    // Drive all rows low (set ODR before switching to output so there is no glitch)
+    GPIOB->BSRR = (1UL << (8 + 16));
+    GPIOB->BSRR = (1UL << (9 + 16));
+    GPIOB->BSRR = (1UL << (14 + 16));
+    GPIOB->BSRR = (1UL << (15 + 16));
 
     // PB8  = D15 = R1
     GPIOB->MODER &= ~(3UL << (8 * 2));
@@ -97,12 +99,101 @@ int main(void)
     GPIOI->MODER &= ~(3UL << (0 * 2));
     GPIOI->PUPDR &= ~(3UL << (0 * 2));
     GPIOI->PUPDR |=  (1UL << (0 * 2));
+}
 
-    // Drive all rows low
-    GPIOB->BSRR = (1UL << (8 + 16));
-    GPIOB->BSRR = (1UL << (9 + 16));
-    GPIOB->BSRR = (1UL << (14 + 16));
-    GPIOB->BSRR = (1UL << (15 + 16));
+/*
+ * Phase 2 row scan.
+ *   col = column index into key_val (0 = C1 ... 3 = C4)
+ * Returns the key character, or 0 if no row was found (e.g. a bounce).
+ * Leaves the pins in the scan state - call keypad_idle_state() afterwards.
+ */
+char keypad_scan(unsigned int col)
+{
+    // Flip rows to inputs with pull-up resistors
+    // PB8  = D15 = R1
+    GPIOB->MODER &= ~(3UL << (8 * 2));
+    GPIOB->PUPDR &= ~(3UL << (8 * 2));
+    GPIOB->PUPDR |= (1UL << (8 * 2));
+
+    // PB9  = D14 = R2
+    GPIOB->MODER &= ~(3UL << (9 * 2));
+    GPIOB->PUPDR &= ~(3UL << (9 * 2));
+    GPIOB->PUPDR |= (1UL << (9 * 2));
+
+    // PB14 = D12 = R3
+    GPIOB->MODER &= ~(3UL << (14 * 2));
+    GPIOB->PUPDR &= ~(3UL << (14 * 2));
+    GPIOB->PUPDR |= (1UL << (14 * 2));
+
+    // PB15 = D11 = R4
+    GPIOB->MODER &= ~(3UL << (15 * 2));
+    GPIOB->PUPDR &= ~(3UL << (15 * 2));
+    GPIOB->PUPDR |= (1UL << (15 * 2));
+
+    // Drive all cols low (set ODR before switching to output)
+    GPIOI->BSRR = (1UL << (0 + 16));
+    GPIOI->BSRR = (1UL << (1 + 16));
+    GPIOI->BSRR = (1UL << (2 + 16));
+    GPIOI->BSRR = (1UL << (3 + 16));
+
+    // Flip columns to outputs
+    // PI1  = D13 = C1
+    GPIOI->MODER &= ~(3UL << (1 * 2));
+    GPIOI->MODER |= (1UL << (1 * 2));
+    GPIOI->PUPDR &= ~(3UL << (1 * 2));
+
+    // PI2  = D8  = C2
+    GPIOI->MODER &= ~(3UL << (2 * 2));
+    GPIOI->MODER |= (1UL << (2 * 2));
+    GPIOI->PUPDR &= ~(3UL << (2 * 2));
+
+    // PI3  = D7  = C3
+    GPIOI->MODER &= ~(3UL << (3 * 2));
+    GPIOI->MODER |= (1UL << (3 * 2));
+    GPIOI->PUPDR &= ~(3UL << (3 * 2));
+
+    // PI0  = D5  = C4
+    GPIOI->MODER &= ~(3UL << (0 * 2));
+    GPIOI->MODER |= (1UL << (0 * 2));
+    GPIOI->PUPDR &= ~(3UL << (0 * 2));
+
+    // Short delay so the row pull-ups can settle
+    for (volatile int d = 0; d < 50; d++);
+
+    unsigned int row = 0xFF;
+
+    // Check PB8  = D15 = R1
+    // Check PB9  = D14 = R2
+    // Check PB14 = D12 = R3
+    // Check PB15 = D11 = R4
+    if (!(GPIOB->IDR & 0x0100)) {
+        row = 0;
+    } else if (!(GPIOB->IDR & 0x0200)) {
+        row = 1;
+    } else if (!(GPIOB->IDR & 0x4000)) {
+        row = 2;
+    } else if (!(GPIOB->IDR & 0x8000)) {
+        row = 3;
+    }
+
+    if (row < 4 && col < 4) {
+        return key_val[row][col];
+    }
+    return 0;
+}
+
+int main(void)
+{
+    // Init registers
+
+	// Enable port I, then enable port B
+	RCC->AHB1ENR |= (1UL << 8) | (1UL << 1);
+
+    // Bit 14 enables SYSCFG clock (for routing GPIO to EXTI)
+    RCC->APB2ENR |= (1UL << 14);
+
+    // Initialize GPIO pins (rows low outputs, columns pull-up inputs)
+    keypad_idle_state();
 
     // Configure EXTI0
     SYSCFG->EXTICR[0] &= ~(0xFUL << (0 * 4));
@@ -152,128 +243,9 @@ void EXTI0_IRQHandler(void) {
 
 		col_hits[0]++;
 
-		// Flip rows to inputs with pull-up resistors
-		// PB8  = D15 = R1
-		GPIOB->MODER &= ~(3UL << (8 * 2));
-		GPIOB->PUPDR &= ~(3UL << (8 * 2));
-		GPIOB->PUPDR |= (1UL << (8 * 2));
+		char last_key = keypad_scan(3);   // PI0 = C4
 
-		// PB9  = D14 = R2
-		GPIOB->MODER &= ~(3UL << (9 * 2));
-		GPIOB->PUPDR &= ~(3UL << (9 * 2));
-		GPIOB->PUPDR |= (1UL << (9 * 2));
-
-		// PB14 = D12 = R3
-		GPIOB->MODER &= ~(3UL << (14 * 2));
-		GPIOB->PUPDR &= ~(3UL << (14 * 2));
-		GPIOB->PUPDR |= (1UL << (14 * 2));
-
-		// PB15 = D11 = R4
-		GPIOB->MODER &= ~(3UL << (15 * 2));
-		GPIOB->PUPDR &= ~(3UL << (15 * 2));
-		GPIOB->PUPDR |= (1UL << (15 * 2));
-
-
-		// Flip columns to outputs, and drive them all low
-		// PI1  = D13 = C1
-		GPIOI->MODER &= ~(3UL << (1 * 2));
-		GPIOI->MODER |= (1UL << (1 * 2));
-		GPIOI->PUPDR &= ~(3UL << (1 * 2));
-
-		// PI2  = D8  = C2
-		GPIOI->MODER &= ~(3UL << (2 * 2));
-		GPIOI->MODER |= (1UL << (2 * 2));
-		GPIOI->PUPDR &= ~(3UL << (2 * 2));
-
-		// PI3  = D7  = C3
-		GPIOI->MODER &= ~(3UL << (3 * 2));
-		GPIOI->MODER |= (1UL << (3 * 2));
-		GPIOI->PUPDR &= ~(3UL << (3 * 2));
-
-		// PI0  = D5  = C4
-		GPIOI->MODER &= ~(3UL << (0 * 2));
-		GPIOI->MODER |= (1UL << (0 * 2));
-		GPIOI->PUPDR &= ~(3UL << (0 * 2));
-
-		// Drive all cols low
-		GPIOI->BSRR = (1UL << (0 + 16));
-		GPIOI->BSRR = (1UL << (1 + 16));
-		GPIOI->BSRR = (1UL << (2 + 16));
-		GPIOI->BSRR = (1UL << (3 + 16));
-
-		unsigned int col = 3;
-		unsigned int row = 0xFF;
-
-		// Short delay
-		for (volatile int d = 0; d < 50; d++);
-
-		// Check PB8  = D15 = R1
-		// Check PB9  = D14 = R2
-		// Check PB14 = D12 = R3
-		// Check PB15 = D11 = R4
-
-		if (!(GPIOB->IDR & 0x0100)) {
-			row = 0;
-		} else if (!(GPIOB->IDR & 0x0200)) {
-			row = 1;
-		} else if (!(GPIOB->IDR & 0x4000)) {
-			row = 2;
-		} else if (!(GPIOB->IDR & 0x8000)) {
-			row = 3;
-		}
-
-		char last_key;
-
-		if (row < 4) {
-			last_key = key_val[row][col];
-		}
-
-		// PB8  = D15 = R1
-		GPIOB->MODER &= ~(3UL << (8 * 2));
-		GPIOB->MODER |= (1UL << (8 * 2));
-		GPIOB->PUPDR &= ~(3UL << (8 * 2));
-
-		// PB9  = D14 = R2
-		GPIOB->MODER &= ~(3UL << (9 * 2));
-		GPIOB->MODER |= (1UL << (9 * 2));
-		GPIOB->PUPDR &= ~(3UL << (9 * 2));
-
-		// PB14 = D12 = R3
-		GPIOB->MODER &= ~(3UL << (14 * 2));
-		GPIOB->MODER |= (1UL << (14 * 2));
-		GPIOB->PUPDR &= ~(3UL << (14 * 2));
-
-		// PB15 = D11 = R4
-		GPIOB->MODER &= ~(3UL << (15 * 2));
-		GPIOB->MODER |= (1UL << (15 * 2));
-		GPIOB->PUPDR &= ~(3UL << (15 * 2));
-
-		// Set all columns as digital inputs w/ pull up resistor
-		// PI1  = D13 = C1
-		GPIOI->MODER &= ~(3UL << (1 * 2));
-		GPIOI->PUPDR &= ~(3UL << (1 * 2));
-		GPIOI->PUPDR |=  (1UL << (1 * 2));
-
-		// PI2  = D8  = C2
-		GPIOI->MODER &= ~(3UL << (2 * 2));
-		GPIOI->PUPDR &= ~(3UL << (2 * 2));
-		GPIOI->PUPDR |=  (1UL << (2 * 2));
-
-		// PI3  = D7  = C3
-		GPIOI->MODER &= ~(3UL << (3 * 2));
-		GPIOI->PUPDR &= ~(3UL << (3 * 2));
-		GPIOI->PUPDR |=  (1UL << (3 * 2));
-
-		// PI0  = D5  = C4
-		GPIOI->MODER &= ~(3UL << (0 * 2));
-		GPIOI->PUPDR &= ~(3UL << (0 * 2));
-		GPIOI->PUPDR |=  (1UL << (0 * 2));
-
-		// Drive all rows low
-		GPIOB->BSRR = (1UL << (8 + 16));
-		GPIOB->BSRR = (1UL << (9 + 16));
-		GPIOB->BSRR = (1UL << (14 + 16));
-		GPIOB->BSRR = (1UL << (15 + 16));
+		keypad_idle_state();
 
 		EXTI->PR = (1UL << 0); // Clear EXTI pending flag
 		NVIC->ICPR[0] = (1UL << 6);   // Clear NVIC Pending bit for IRQ6
