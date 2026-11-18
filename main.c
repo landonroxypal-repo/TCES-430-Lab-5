@@ -18,6 +18,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include "stm32f7xx.h"
 
 #if !defined(__SOFT_FP__) && defined(__ARM_FP)
@@ -37,8 +38,10 @@ volatile uint8_t key_ready = 0; // Set by ISR, cleared by main loop
 #define RS_HIGH()   (GPIOA->BSRR = (1UL << 8))
 #define RS_LOW()    (GPIOA->BSRR = (1UL << (8 + 16)))
 
-// Passive buzzer is driven by TIM3 CH1 PWM o20d 2.7 kHz, which is where they are loudest.
-// If yours is still quiet, try 333 (3 kHz), 400 (2.5 kHz) or 250 (4 kHz).
+// Passive buzzer is driven by TIM3 CH1 PWM on PB4 (4 kHz square wave).
+// The timer always runs; "off" just sets the duty cycle to 0%.
+// 4 kHz tested loudest on this buzzer (closest to its resonant frequency).
+// 50% duty gives the strongest tone - more or less duty makes it quieter.
 #define BUZZER_PERIOD 250  // 1 MHz timer tick / 250 = 4 kHz tone
 #define BUZZER_ON()  (TIM3->CCR1 = BUZZER_PERIOD / 2) // 50% duty -> tone
 #define BUZZER_OFF() (TIM3->CCR1 = 0)                 // 0% duty  -> silent (pin low)
@@ -47,6 +50,20 @@ volatile uint8_t key_ready = 0; // Set by ISR, cleared by main loop
 #define BEEP_MS          100   // Short beep on every keypress
 #define GRANTED_TONE_MS  2000  // Continuous 2-second tone on Access Granted
 #define LOCKOUT_PULSE_MS 500   // Pulse on alternating seconds during the lockout countdown
+
+// Safe lock settings
+#define SECRET_PIN      "1234"
+#define PIN_LEN         4
+#define MAX_ATTEMPTS    3   // Wrong PINs allowed before lockout
+#define LOCKOUT_SECONDS 30  // Lockout countdown length
+#define GRANTED_SECONDS 2   // How long "Access Granted!" stays up
+
+// States for the main loop
+typedef enum {
+    STATE_ENTRY,    // Waiting for PIN digits
+    STATE_GRANTED,  // Correct PIN, showing Access Granted! (keys ignored)
+    STATE_LOCKED    // Too many wrong PINs, counting down (keys ignored)
+} SafeState;
 
 const unsigned char key_val[4][4] = {
 		{'1', '2', '3', 'A'},
@@ -327,6 +344,34 @@ void LCD_DisplayString(char *str) {
     }
 }
 
+// Write a string at the start of line 2 (line 1 is left alone)
+void LCD_Line2(char *str) {
+    LCD_Cmd(0xC0); // Cursor to line 2, column 0
+
+    while (*str) {
+        LCD_Data(*str++);
+    }
+}
+
+// Show a message on line 1 and leave the cursor on line 2 for the asterisks
+void Show_Entry_Screen(char *line1) {
+    LCD_DisplayString(line1);
+    LCD_Cmd(0xC0);
+}
+
+// Show the lockout countdown on line 2, e.g. "Time: 30"
+void Show_Lockout_Time(uint8_t seconds) {
+    char buffer[17];
+    snprintf(buffer, sizeof(buffer), "Time: %2u", seconds);
+    LCD_Line2(buffer);
+}
+
+// Restart TIM2 so the next 1-second flag is a full second from now
+void TIM2_Restart(void) {
+    TIM2->CNT = 0;
+    TIM2->SR &= ~(1UL << 0); // Clear the Update Interrupt Flag (UIF)
+}
+
 int main(void)
 {
     // Init registers
@@ -337,8 +382,9 @@ int main(void)
     // Bit 14 enables SYSCFG clock (for routing GPIO to EXTI)
     RCC->APB2ENR |= (1UL << 14);
 
-    // Bit 1 enables TIM3 clock (buzzer PWM), Bit 2 enables TIM4 clock (1 ms ticker)
-    RCC->APB1ENR |= (1UL << 1) | (1UL << 2);
+    // Bit 0 enables TIM2 clock (1 s timebase), Bit 1 enables TIM3 clock (buzzer PWM),
+    // Bit 2 enables TIM4 clock (1 ms ticker)
+    RCC->APB1ENR |= (1UL << 0) | (1UL << 1) | (1UL << 2);
 
     // Initialize GPIO pins (rows low outputs, columns pull-up inputs)
     keypad_idle_state();
@@ -394,7 +440,7 @@ int main(void)
     TIM4->CR1 |= TIM_CR1_CEN; // Left running forever; TIM4_DelayMs only reads CNT
 
     // ------------------------------------------------------------
-    // TIMER 3 CONFIGURATION (~2.7 kHz PWM tone for the passive buzzer)
+    // TIMER 3 CONFIGURATION (4 kHz PWM tone for the passive buzzer)
     // ------------------------------------------------------------
     TIM3->PSC  = 15;                  // 16 MHz / 16 = 1 MHz tick
     TIM3->ARR  = BUZZER_PERIOD - 1;   // 1 MHz / BUZZER_PERIOD = tone frequency
@@ -408,8 +454,16 @@ int main(void)
     TIM3->CR1   |=  TIM_CR1_CEN;      // Run forever; BUZZER_ON/OFF only change CCR1
 
     LCD_Initialize();
-    LCD_DisplayString("Enter PIN:");
-    LCD_Cmd(0xC0); // Move cursor to start of line 2 for the asterisks
+    // ------------------------------------------------------------
+    // TIMER 2 CONFIGURATION (1-second timebase, flag polled)
+    // ------------------------------------------------------------
+    TIM2->PSC = 15999;        // 16 MHz / 16000 = 1 kHz (1 ms ticks)
+    TIM2->ARR = 999;          // Counts 0..999 = 1000 ticks = exactly 1 second
+    TIM2->EGR = TIM_EGR_UG;   // Latch PSC (this also sets UIF, cleared next)
+    TIM2->SR &= ~(1UL << 0);  // Clear the Update Interrupt Flag (UIF)
+    TIM2->CR1 |= (1UL << 0);  // Enable Counter (CEN bit)
+
+    Show_Entry_Screen("Enter PIN:");
 
     // Configure EXTI0
     SYSCFG->EXTICR[0] &= ~(0xFUL << (0 * 4));
@@ -451,6 +505,12 @@ int main(void)
 
     NVIC->ISER[0] |= (1UL << 9);         //Enable IRQ 9
 
+    SafeState state = STATE_ENTRY;
+    char entered[PIN_LEN + 1] = {0}; // Keys typed so far (+1 for '\0')
+    uint8_t entered_len = 0;
+    uint8_t failed_attempts = 0;
+    uint8_t seconds_left = 0;        // Countdown for GRANTED / LOCKED
+
     while (1) {
         // ------------------------------------------------------------
         // MAIN LOOP STEP A: New keypress from the ISR
@@ -458,12 +518,81 @@ int main(void)
         if (key_ready) {
             key_ready = 0;
 
-            Buzzer_Beep(BEEP_MS); // Start the beep first so it lines up with the press
-            LCD_Data('*');        // Mask the key on line 2
+            // Keys are only accepted while entering a PIN.
+            // In GRANTED / LOCKED they are read and thrown away (locked out).
+            if (state == STATE_ENTRY) {
+                Buzzer_Beep(BEEP_MS); // Start the beep first so it lines up with the press
+                LCD_Data('*');        // Mask the key on line 2
+
+                entered[entered_len++] = last_key;
+
+                if (entered_len == PIN_LEN) {
+                    entered[PIN_LEN] = '\0';
+                    entered_len = 0;
+
+                    if (strcmp(entered, SECRET_PIN) == 0) {
+                        // Correct PIN -> Access Granted + 2 second tone
+                        failed_attempts = 0;
+                        state = STATE_GRANTED;
+                        seconds_left = GRANTED_SECONDS;
+                        LCD_DisplayString("Access Granted!");
+                        Buzzer_Beep(GRANTED_TONE_MS);
+                        TIM2_Restart();
+                    } else {
+                        failed_attempts++;
+
+                        if (failed_attempts >= MAX_ATTEMPTS) {
+                            // Third wrong PIN -> lockout countdown
+                            state = STATE_LOCKED;
+                            seconds_left = LOCKOUT_SECONDS;
+                            LCD_DisplayString("LOCKED!");
+                            Show_Lockout_Time(seconds_left);
+                            Buzzer_Beep(LOCKOUT_PULSE_MS); // First pulse at 30 (even second)
+                            TIM2_Restart();
+                        } else {
+                            // Wrong PIN, try again
+                            char buffer[17];
+                            snprintf(buffer, sizeof(buffer), "Wrong PIN %u/%u",
+                                     failed_attempts, MAX_ATTEMPTS);
+                            Show_Entry_Screen(buffer);
+                        }
+                    }
+                }
+            }
         }
 
         // ------------------------------------------------------------
-        // MAIN LOOP STEP B: Non-blocking buzzer timeout
+        // MAIN LOOP STEP B: 1-second timebase (TIM2 flag polling)
+        // ------------------------------------------------------------
+        if (TIM2->SR & (1UL << 0)) {
+            TIM2->SR &= ~(1UL << 0); // Clear update flag manually
+
+            if (state == STATE_GRANTED) {
+                seconds_left--;
+                if (seconds_left == 0) {
+                    state = STATE_ENTRY;
+                    Show_Entry_Screen("Enter PIN:");
+                }
+            } else if (state == STATE_LOCKED) {
+                seconds_left--;
+                if (seconds_left == 0) {
+                    // Lockout over -> fresh set of attempts
+                    failed_attempts = 0;
+                    state = STATE_ENTRY;
+                    Show_Entry_Screen("Enter PIN:");
+                } else {
+                    Show_Lockout_Time(seconds_left);
+
+                    // Acoustic pulse on alternating seconds
+                    if (seconds_left % 2 == 0) {
+                        Buzzer_Beep(LOCKOUT_PULSE_MS);
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------
+        // MAIN LOOP STEP C: Non-blocking buzzer timeout
         // ------------------------------------------------------------
         Buzzer_Update();
     }
